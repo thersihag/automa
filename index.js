@@ -18,6 +18,8 @@ const BASE_URL = (process.env.BASE_URL || '').replace(/\/$/, '');
 // WhatsApp Gateway Settings
 const GATEWAY_URL = 'https://rp-digital-tribes-wa-api.onrender.com/api/send';
 const SESSION = 'rp-01';
+// FILE_MODE: 'link' (default) = PDF/video ka link text me bhejta hai, 'media' = gateway ko media ki tarah bhejne ki koshish
+const FILE_MODE = process.env.FILE_MODE || 'link';
 
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
@@ -97,16 +99,41 @@ async function dispatchMessage(item) {
       number: item.number,
       text: item.message
     };
+
     if (item.imageUrl && item.imageUrl.trim() !== '') {
-      params.url = item.imageUrl;
-      params.media = item.imageUrl;
+      const isImage = /\.(jpe?g|png|gif|webp)$/i.test(item.imageFile || item.imageUrl);
+      if (isImage) {
+        // Image: gateway ko url + media dono bhejo
+        params.url = item.imageUrl;
+        params.media = item.imageUrl;
+      } else if (FILE_MODE === 'media') {
+        // Experimental: gateway ko file ki detail ke saath bhejo
+        params.url = item.imageUrl;
+        params.media = item.imageUrl;
+        params.filename = item.originalName || item.imageFile;
+        params.mimetype = 'application/octet-stream';
+      } else {
+        // Default (pakka chalne wala): file ka link message ke andar daal do
+        params.text = `${item.message}\n\n\u{1F4CE} File: ${item.imageUrl}`;
+      }
     }
 
-    const response = await axios.get(GATEWAY_URL, { params, timeout: 30000 });
+    const response = await axios.get(GATEWAY_URL, { params, timeout: 120000 });
+    console.log('Gateway response:', JSON.stringify(response.data));
 
-    item.status = 'SENT';
-    item.sentAt = getISTTimestamp();
-    item.gatewayResponse = response.data;
+    const d = response.data;
+    const looksFailed =
+      d && typeof d === 'object' && (d.success === false || d.status === false || d.error);
+
+    item.gatewayResponse = d;
+    if (looksFailed) {
+      item.status = 'FAILED';
+      item.failedAt = getISTTimestamp();
+      item.error = JSON.stringify(d);
+    } else {
+      item.status = 'SENT';
+      item.sentAt = getISTTimestamp();
+    }
   } catch (error) {
     item.status = 'FAILED';
     item.failedAt = getISTTimestamp();
@@ -177,6 +204,8 @@ function createItem(req) {
     message: message.trim(),
     imageUrl,
     imageFile,
+    originalName: req.file ? req.file.originalname : '',
+    mimeType: req.file ? req.file.mimetype : '',
     scheduledAt: getISTTimestamp(),
     executeAtTimeIST: getISTTimestamp(executeAt),
     executeAt,
@@ -265,7 +294,7 @@ app.get('/', (req, res) => {
       <td style="padding:10px;">
         <span style="padding:4px 8px;border-radius:4px;font-size:12px;font-weight:bold;${badge(m.status)}">${esc(m.status)}</span>
       </td>
-      <td style="padding:10px;font-size:12px;color:#6b7280;">${esc(m.sentAt || m.error || '-')}</td>
+      <td style="padding:10px;font-size:12px;color:#6b7280;">${esc(m.sentAt || m.error || '-')}${m.gatewayResponse ? '<br><small>' + esc(JSON.stringify(m.gatewayResponse).slice(0, 200)) + '</small>' : ''}<br><small>${esc(m.gatewayResponse ? JSON.stringify(m.gatewayResponse).slice(0, 200) : '')}</small></td>
       <td style="padding:10px;">${
         m.status === 'PENDING'
           ? `<form method="POST" action="/cancel/${encodeURIComponent(m.id)}"><button class="small red">Cancel</button></form>`
