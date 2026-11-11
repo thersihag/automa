@@ -32,12 +32,14 @@ const storage = multer.diskStorage({
     cb(null, `${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`);
   }
 });
+const BLOCKED_EXT = ['.html', '.htm', '.js', '.mjs', '.svg', '.php', '.exe', '.bat', '.sh', '.msi'];
 const upload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // max 5 MB
+  limits: { fileSize: 200 * 1024 * 1024 }, // max 200 MB
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) cb(null, true);
-    else cb(new Error('Sirf image file allowed hai'));
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (BLOCKED_EXT.includes(ext)) cb(new Error('Ye file type allowed nahi hai'));
+    else cb(null, true); // image, video, pdf, doc sab allowed
   }
 });
 
@@ -200,10 +202,10 @@ function handleSchedule(req, res, isApi) {
 }
 
 // API: multipart/form-data (fields: number, message, scheduleTime, image)
-app.post('/api/schedule', upload.single('image'), (req, res) => handleSchedule(req, res, true));
+app.post('/api/schedule', upload.single('file'), (req, res) => handleSchedule(req, res, true));
 
 // HTML form submit
-app.post('/schedule-form', upload.single('image'), (req, res) => handleSchedule(req, res, false));
+app.post('/schedule-form', upload.single('file'), (req, res) => handleSchedule(req, res, false));
 
 // Pending message cancel
 app.post('/cancel/:id', (req, res) => {
@@ -253,7 +255,9 @@ app.get('/', (req, res) => {
       <td style="padding:10px;max-width:250px;">${esc(m.message)}</td>
       <td style="padding:10px;">${
         m.imageFile
-          ? `<a href="/uploads/${encodeURIComponent(m.imageFile)}" target="_blank"><img src="/uploads/${encodeURIComponent(m.imageFile)}" style="width:50px;height:50px;object-fit:cover;border-radius:6px;" /></a>`
+          ? (/\.(jpe?g|png|gif|webp)$/i.test(m.imageFile)
+              ? `<a href="/uploads/${encodeURIComponent(m.imageFile)}" target="_blank"><img src="/uploads/${encodeURIComponent(m.imageFile)}" style="width:50px;height:50px;object-fit:cover;border-radius:6px;" /></a>`
+              : `<a href="/uploads/${encodeURIComponent(m.imageFile)}" target="_blank">📎 ${esc(m.imageFile.split('.').pop().toUpperCase())} file</a>`)
           : '-'
       }</td>
       <td style="padding:10px;">${esc(m.scheduledAt)}</td>
@@ -302,9 +306,10 @@ app.get('/', (req, res) => {
           <label>Message Text:</label>
           <textarea name="message" rows="3" placeholder="Apna message yahan likhein..." required></textarea>
 
-          <label>Image Upload (Optional):</label>
-          <input type="file" name="image" id="image" accept="image/*" />
+          <label>File Upload - Image / Video / PDF / Doc (Optional, max 200 MB):</label>
+          <input type="file" name="file" id="image" />
           <img id="preview" alt="preview" />
+          <div id="fname" style="font-size:13px;color:#6b7280;margin-bottom:14px;"></div>
 
           <label>Kab bhejna hai (Indian Time - IST):</label>
           <input type="datetime-local" name="scheduleTime" value="${nowISTInputValue(120)}" min="${nowISTInputValue(0)}" required />
@@ -336,10 +341,15 @@ app.get('/', (req, res) => {
       <script>
         const input = document.getElementById('image');
         const preview = document.getElementById('preview');
+        const fname = document.getElementById('fname');
         input.addEventListener('change', () => {
           const f = input.files[0];
-          if (f) { preview.src = URL.createObjectURL(f); preview.style.display = 'block'; }
-          else preview.style.display = 'none';
+          preview.style.display = 'none';
+          fname.textContent = '';
+          if (!f) return;
+          if (f.size > 200 * 1024 * 1024) { alert('File 200 MB se badi hai'); input.value = ''; return; }
+          fname.textContent = f.name + ' (' + (f.size / 1048576).toFixed(1) + ' MB)';
+          if (f.type.startsWith('image/')) { preview.src = URL.createObjectURL(f); preview.style.display = 'block'; }
         });
       </script>
     </body>
